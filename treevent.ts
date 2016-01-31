@@ -2,16 +2,13 @@ import splay = require('./splay');
 
 /*
 Remaining:
-2) Array parent-child
- a) Tree structure
- b) Message passing
- c) Detachment
-3) Listeners
-4) Better array events
- a) Replace push/slice/...
+1) Array index mutation methods
+https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array#Methods_2
+2) Listeners
+3) Better tests / documentation etc...
 */
 
-export var _sym = Symbol('treevent');
+export let _sym = Symbol('treevent');
 
 interface TreeventMeta {
   attachToParent(parent: any, key: string);
@@ -25,18 +22,19 @@ export function meta(target: any): TreeventMeta {
 }
 
 function reparent(target: any, parent: any, parentKey: string) {
-  var childMeta = meta(target);
+  let childMeta = meta(target);
   if (childMeta !== null) {
     childMeta.attachToParent(parent, parentKey);
   }
 }
 
 function genID(): string {
-  var d = new Date().getTime();
-  return 'xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-      var r = (d + Math.random()*16)%16;
-      d = Math.floor(d/16);
-      return r.toString();
+  let d = new Date().getTime();
+  // HACK - improve. Small only for testing.
+  return 'xxxxx'.replace(/x/g, function(c) {
+    let r = ((d + Math.random()*16)%16) | 0;
+    d = Math.floor(d/16);
+    return "0123456789ABCDEF".charAt(r);
   });
 }
 
@@ -51,17 +49,19 @@ function canTrack(value: any): boolean {
 
 
 function WrapArray(array: Array<any>) {
-  console.log("Wrapping array...");
-  array[_sym] = new ArrayMeta(array);
-  array.forEach(v => Wrap(v));
+  let meta = new ArrayMeta(array);
+  array[_sym] = meta;
+  array.forEach(v => {
+    Wrap(v);
+    reparent(v, array, meta.pushID());
+  });
   // EW :(
   (<any>Object).observe(array, ArrayListener(array));
 }
 
 function WrapObject(obj: Object) {
-  console.log("Wrapping object...");
   obj[_sym] = new ObjectMeta(obj);
-  for (var key in obj) {
+  for (let key in obj) {
     Wrap(obj[key]);
     reparent(obj[key], obj, key);
   }
@@ -92,9 +92,9 @@ function ObjectListener(target: Object): Function {
 }
 
 function handleObjectChange(change: any) {
-  var {name, object: target, oldValue, type} = change;
-  var newValue = target[name];
-  var meta: ObjectMeta = target[_sym];
+  let {name, object: target, oldValue, type} = change;
+  let newValue = target[name];
+  let meta: ObjectMeta = target[_sym];
   meta.directChange(name, oldValue, newValue);
 }
 
@@ -105,10 +105,10 @@ function ArrayListener(target: Object): Function {
 }
 
 function handleArrayChange(change: any) {
-  console.log(change);
-  var {name, object: target, oldValue, type} = change;
-  var newValue = target[name];
-  var meta: ArrayMeta = target[_sym];
+  // console.log(change);
+  let {name, object: target, oldValue, type} = change;
+  let newValue = target[name];
+  let meta: ArrayMeta = target[_sym];
   meta.directChange(name, oldValue, newValue);
 }
 
@@ -116,9 +116,11 @@ class ArrayMeta implements TreeventMeta {
   target: Array<any>;
   parent: any;
   parentKey: string;
+  tree: splay.Tree;
 
   constructor(target: Array<any>) {
     this.target = target;
+    this.tree = new splay.Tree();
   }
 
   attachToParent(parent: any, key: string) {
@@ -131,18 +133,33 @@ class ArrayMeta implements TreeventMeta {
     Wrap(newValue);
 
     // TODO - use tree.
-    // var index = +path;
-    // var indexKey = nthNode(index);
+    let index = +path;
+    let key = this.tree.keyForIndex(index);
+    reparent(newValue, this.target, key);
 
     this.pathChange([path], oldValue, newValue);
   }
 
   pathChange(path: Array<any>, oldValue: any, newValue: any) {
     console.log("%s changes, %s -> %s", JSON.stringify(path), oldValue, newValue);
+    let parentMeta = meta(this.parent);
+
+    if (parentMeta !== null) {
+      // NOTE: reverse path instead? Have immutable version?
+      path.unshift(parentMeta.keyToPath(this.parentKey)); 
+      parentMeta.pathChange(path, oldValue, newValue);
+    }
   }
 
   keyToPath(key: string): string {
-    throw "TODO";
+    // PICK - change return type to number?
+    return "" + this.tree.indexForKey(key);
+  }
+  
+  pushID(): string {
+    let newId = genID();
+    this.tree.push(newId);
+    return newId;
   }
 }
 
@@ -169,7 +186,7 @@ class ObjectMeta implements TreeventMeta {
 
   pathChange(path: Array<any>, oldValue: any, newValue: any) {
     console.log("%s changes, %s -> %s", JSON.stringify(path), oldValue, newValue);
-    var parentMeta = meta(this.parent);
+    let parentMeta = meta(this.parent);
 
     if (parentMeta !== null) {
       // NOTE: reverse path instead? Have immutable version?
