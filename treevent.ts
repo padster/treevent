@@ -1,106 +1,16 @@
-import splay = require('./splay');
+// treevent.ts contains the public listening API definitions.
 
-/*
-Remaining:
-2) Better tests / documentation etc...
-*/
-
-export let _sym = Symbol('treevent');
-
-function cast<T>(instance, ctor: { new(...args: any[]): T }): T {
-    if (instance instanceof ctor) return instance;
-    throw new Error('type cast exception');
-}
-
-interface TreeventMeta {
-  attachToParent(parent: any, key: string);
-  pathChange({path: Array, type: string, index: number, oldValue, newValue});
-  keyToPath(key: string): number|string;
-  listen(path: string, listener: Listener) : ()=>void;
-}
-
-type Listener = (path: Array<string>, params: any, type: string, index: number, oldValue: any, newValue: any) => any
-
-export function Meta(target: any): TreeventMeta {
-  return canTrack(target) ? (<TreeventMeta>target[_sym]) : null;
-}
-
-function reparent(target: any, parent: any, parentKey: string) {
-  let childMeta = Meta(target);
-  if (childMeta != null) {
-    childMeta.attachToParent(parent, parentKey);
-  }
-}
-
-function genID(): string {
-  let d = new Date().getTime();
-  // HACK - improve. Small only for testing.
-  return 'xxxxx'.replace(/x/g, function(c) {
-    let r = ((d + Math.random()*16)%16) | 0;
-    d = Math.floor(d/16);
-    return "0123456789ABCDEF".charAt(r);
-  });
-}
-
-const symbolTest = Symbol('test');
-function canTrack(value: any): boolean {
-  if (value === null || value === undefined) {
-    return false;
-  }
-  value[symbolTest] = true;
-  return value[symbolTest] === true;
-}
+import common = require('./common');
+import meta = require('./meta');
 
 
-function WrapArray(array: Array<any>) {
-  let meta = new ArrayMeta(array);
-  array[_sym] = meta;
-  array.forEach(v => {
-    Wrap(v);
-    reparent(v, array, meta.pushID());
-  });
-  // EW :(
-  (<any>Array).observe(array, ArrayListener(array));
-}
-
-function WrapObject(obj: Object) {
-  obj[_sym] = new ObjectMeta(obj);
-  for (let key in obj) {
-    Wrap(obj[key]);
-    reparent(obj[key], obj, key);
-  }
-  // EW :(
-  (<any>Object).observe(obj, ObjectListener(obj));
-}
-
-export function Wrap(value: any): void {
-  if (value === null || value === undefined) {
-    // Ignore
-  } else if (Meta(value) != undefined) {
-    // No-op, already wrapped!
-  } else if (Array.isArray(value)) {
-    WrapArray(value);
-  } else if (canTrack(value)) {
-    WrapObject(value);
-  } else {
-    // No-op, primitive!
-  }
-}
-
-export function ListenWithSplice(value: any, path: string, listener: Listener) : () => void {
-  if (value === null || value === undefined) {
-    throw "Can't listen to null or undefined...";
-  }
-  Wrap(value);
-  let valueMeta = Meta(value);
-  if (valueMeta === undefined) {
-    throw "Can't listen to primitives...";
-  } else {
-    return valueMeta.listen(path, listener)
-  }
-}
-
-export function Listen(value: any, path: string, listener: Listener): () => void {
+/**
+ * Listen to a non-primitive object (possibly first wrapping it) at a given path.
+ * @param value Value to listen to
+ * @param path Path to listen at, can include "*", "{matchers}", and "**" match-all at the end.
+ * @param listener The listener that receives the events.
+ */
+export function Listen(value: any, path = "**", listener: common.Listener): () => void {
   return ListenWithSplice(value, path, (path: Array<string>, params: any, type: string, index: number, oldValue, newValue) => {
     switch (type) {
       case "update":
@@ -137,219 +47,112 @@ export function Listen(value: any, path: string, listener: Listener): () => void
   });
 }
 
+/** 
+ * Similar to Listen above, with two differences:
+ *   - Emits "update" events with undefined old/new values, instead of "create" and "delete" respectively.
+ *   - Emits "splice" events atomically, which merge all changes in a single splice call.
+ * More complex handling logic, but closer the the underlying implementation.
+ */
+export function ListenWithSplice(value: any, path: string, listener: common.Listener) : () => void {
+  if (value === null || value === undefined) {
+    throw "Can't listen to null or undefined...";
+  }
+  Wrap(value);
+  let valueMeta = meta.Meta(value);
+  if (valueMeta === undefined) {
+    throw "Can't listen to primitives...";
+  } else {
+    return valueMeta.listen(path, listener)
+  }
+}
+
+
+/**
+ * Wrap a JS object (and all child properties) for use within treevent.
+ * NOTE: You can't wrap primitives. Arrays and Objects only.
+ */
+function Wrap(value: any): void {
+  if (value === null || value === undefined) {
+    // Ignore
+  } else if (meta.Meta(value) != undefined) {
+    // No-op, already wrapped!
+  } else if (Array.isArray(value)) {
+    value[meta._sym] = new meta.ArrayMeta(value, wrappers);
+    (<any>Array).observe(value, ArrayListener(value));
+  } else if (common.canTrack(value)) {
+    value[meta._sym] = new meta.ObjectMeta(value, wrappers);
+    (<any>Object).observe(value, ObjectListener(value));
+  } else {
+    // No-op, primitive!
+  }
+}
+
+/**
+ * Removes a JS object from treevent tracking.
+ * Currently does nothing...
+ */
 function Unwrap(value: any): void {
   // TODO?
 }
 
-function ObjectListener(target: Object): Function {
-  return (changes => changes.forEach(handleObjectChange));
-}
+const wrappers = {wrap: Wrap, unwrap: Unwrap}; // HACK - used to inject wrap/unwrap into the meta objects.
 
-function handleObjectChange(change: any) {
-  let {name, object: target, oldValue, type} = change;
-  let newValue = target[name];
-  let targetMeta = cast(Meta(target), ObjectMeta);
-  targetMeta.directChange(name, oldValue, newValue);
-}
 
+/**
+ * Generates a listener for Array.observe, translating those events
+ * into ones treevent uses to update the observed array.
+ */
 function ArrayListener(target: Object): Function {
   return (changes => { 
-    if (changes.length != 1) {
-      return; // Possible?
-    } else switch(changes[0].type) {
+    changes.forEach(change => {
+      switch(change.type) {
         case "update":
-          handleArrayUpdate(changes[0]);
+          handleArrayUpdate(change);
           break;
         case "splice":
-          handleArraySplice(changes[0]);
+          handleArraySplice(change);
           break;
         case "add":
         case "delete":
-          debugger;
-          console.error("Add/Delete not handled by treevent.");
+          console.log("Add/Delete not handled by treevent.");
           break;
-    }
+      }
+    });
   });
 }
 
+/** Handles array updates - i.e. array[5] = {newValue}. */
 function handleArrayUpdate(change: any) {
   let {name, oldValue, type, object: target} = change;
   let newValue = target[name];
-  let targetMeta = cast(Meta(target), ArrayMeta);
+  let targetMeta = common.cast(meta.Meta(target), meta.ArrayMeta);
   targetMeta.directUpdate(name, oldValue, newValue);
 }
 
+/** Handles array splices - including splice, push, pop, unshift, ... */
 function handleArraySplice(change: any) {
+  // TODO - for some reason, fill() isn't caught...
   let {addedCount, index, removed: oldValues, object: target} = change;
   var newValues = target.slice(index, index + addedCount);
-  let targetMeta = cast(Meta(target), ArrayMeta);
+  let targetMeta = common.cast(meta.Meta(target), meta.ArrayMeta);
   targetMeta.directSplice(index, oldValues, newValues);
 }
 
 
-abstract class BaseMeta implements TreeventMeta {
-  parent: any;
-  parentKey: string;
-  listeners: Array<{listener: Listener, parsedPath: Array<string>}>;
+/**
+ * Generates a listener for Object.observe, translating those events
+ * into ones treevent uses to update the observed object.
+ */
+function ObjectListener(target: Object): Function {
+  return (changes => changes.forEach(handleObjectChange));
+}
 
-  constructor() {
-    this.listeners = [];
-  }
-
-  attachToParent(parent: any, key: string) {
-    this.parent = parent;
-    this.parentKey = key;
-  }
-
-  pathChange({path = [], type, index = -1, oldValue = null, newValue = null}) {
-    // TODO - use the parsed paths for indexing listeners, so this goes much faster...
-    this.listeners.forEach(detail => {
-      let {listener, parsedPath} = detail;
-      let params = this.extractParams(path, parsedPath);
-      if (params != null) {
-        listener(path, params, type, index, oldValue, newValue);
-      }
-    });
-
-    let parentMeta = Meta(this.parent);
-    if (parentMeta != null) {
-      // NOTE: reverse path instead? Have immutable version?
-      path.unshift(parentMeta.keyToPath(this.parentKey)); 
-      parentMeta.pathChange({path, type, index, oldValue, newValue});
-    }
-  }
-
-  keyToPath(key: string): number|string { throw "abstract..."; }
-
-  listen(path: string, listener: Listener) : ()=>void {
-    let parsedPath = this.parse(path);
-    this.listeners.push({listener, parsedPath});
-    return function() {
-      for (let at = 0; at < this.listeners.length; at++) {
-        if (this.listeners[at].listener === listener) {
-          this.listeners.splice(at, 1);
-          return;
-        }
-      }
-    };
-  }
-
-  parse(path: string): Array<string> {
-    // NOTE: remaps a[x] to a.x before splitting. PICK: also remap a/x to a.x?
-    return path.replace(new RegExp("\\[([^\\]])\\]", "g"), ".$1").split(".");
-  }
-
-  extractParams(path: Array<any>, parsedPath: Array<string>): Object {
-    let pathAt = 0, params = {};
-    parsedPath.every(p => {
-      // PICK: use ${key} or {key} or :key etc...?
-      if (p.startsWith('{') && p.endsWith('}')) {
-        if (pathAt >= path.length) { return null; }
-        params[p.substring(1, p.length - 1)] = path[pathAt];
-        pathAt++;
-      } else if (p == "*") {
-        pathAt++;
-      } else if (p == "**") {
-        params["**"] = path.slice(pathAt);
-      } else if (pathAt >= path.length || p != path[pathAt]) {
-        params = null;
-        return false;
-      }
-      return true;
-    });
-    return params;
-  }
+/** Handles object updates, including creates and deletes. */
+function handleObjectChange(change: any) {
+  let {name, object: target, oldValue, type} = change;
+  let newValue = target[name];
+  let targetMeta = common.cast(meta.Meta(target), meta.ObjectMeta);
+  targetMeta.directChange(name, oldValue, newValue);
 }
 
 
-class ArrayMeta extends BaseMeta {
-  target: Array<any>;
-  tree: splay.Tree;
-
-  constructor(target: Array<any>) {
-    super();
-    this.target = target;
-    this.tree = new splay.Tree();
-  }
-
-  directUpdate(path: string, oldValue: any, newValue: any) {
-    Unwrap(oldValue);
-    Wrap(newValue);
-
-    let index = +path;
-    let key = this.tree.keyForIndex(index);
-    reparent(newValue, this.target, key);
-
-    this.pathChange({
-      path: [path], 
-      type: "update",
-      oldValue, newValue
-    });
-  }
-
-  directSplice(index: number, oldValue: Array<any>, newValue: Array<any>) {
-    oldValue.forEach(v => Unwrap(v));
-    newValue.forEach(v => Wrap(v));
-
-    let toEdit = Math.max(oldValue.length, newValue.length);
-    for (var i = 0; i < toEdit; i++) {
-      let indexAt = index + i;
-      if (i < oldValue.length && i < newValue.length) {
-        // Old replaced with new, so switch key old -> new.
-        reparent(newValue[i], this.target, this.tree.keyForIndex(indexAt));
-      } else if (i < newValue.length) {
-        // New added, old not removed, so insert a new one here
-        let newKey = genID();
-        this.tree.insertBefore(indexAt, newKey);
-        reparent(newValue[i], this.target, newKey);
-      } else {
-        // toEdit < oldValue.length
-        // Old removed, new not added, so remove the key.
-        this.tree.remove(index + newValue.length);
-      }
-    }
-
-    this.pathChange({
-      path: [],
-      type: "splice",
-      index, oldValue, newValue
-    });
-  }
-
-  keyToPath(key: string): number {
-    return this.tree.indexForKey(key);
-  }
-  
-  pushID(): string {
-    let newId = genID();
-    this.tree.push(newId);
-    return newId;
-  }
-}
-
-class ObjectMeta extends BaseMeta {
-  target: Object;
-  parent: any;
-  parentKey: string;
-
-  constructor(target: Object) {
-    super();
-    this.target = target;
-  }
-
-  directChange(path: string, oldValue: any, newValue: any) {
-    Unwrap(oldValue);
-    Wrap(newValue);
-    reparent(newValue, this.target, path);
-    this.pathChange({
-      path: [path], 
-      type: "update",
-      index: -1,
-      oldValue, newValue
-    });
-  }
-
-  keyToPath(key: string): string {
-    return key;
-  }
-}

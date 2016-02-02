@@ -1,3 +1,15 @@
+// splay.ts contains a Splay Tree implementation.
+
+/**
+ * Splay Tree implementation. Not clean, and not new, not much to see here.
+ * For details, see: https://en.wikipedia.org/wiki/Splay_tree
+ *
+ * The main desire was to have a string array with quick inverse index lookup, i.e:
+ *   - O(log n) insertBefore(index, key)
+ *   - O(log n) remove(index) 
+ *   - O(log n) key => index map 
+ *   - O(log n) index => key map 
+ */
 export class Tree {
   root: Node;
   nodeMap: {[key:string]: Node};
