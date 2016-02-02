@@ -6,15 +6,24 @@ import treevent = require('./treevent');
 Example:
 List aggregation 
 ***********/
-let numbers = [1, 6, -3];
-let sum = numbers.reduce((a, b) => a + b);
-treevent.Listen(numbers, "**", (path, params, type, index, oldValue, newValue) => {
-  sum += (newValue | 0) - (oldValue | 0);
-  console.log(`Sum is now ${sum}`);
+
+let student = {
+  scores: [1, 6, -3],
+  totalScore: 0,
+}
+student.totalScore = student.scores.reduce((a, b) => a + b),
+
+
+treevent.Listen(student, "scores", (path, params, type, index, oldValue, newValue) => {
+  student.totalScore += (newValue | 0) - (oldValue | 0);
+  // Will log 14 (10 introduced), then 8 (6 removed), then 3 (1 replaced with -4).
+  console.log(`...sum is now ${student.totalScore}`);
 });
-numbers.unshift(10);
-numbers.splice(1, 2, -4);
-// Will log 14 (10 introduced), then 8 (6 removed), then 3 (1 replaced with -4).
+student.scores.unshift(10);
+student.scores.splice(1, 2, -4);
+// NOTE: Object changes are processed asynchronously!
+console.log(`Sync > Student score is: ${student.totalScore}`) // 4
+requestAnimationFrame(() => console.log(`Async> Student score is: ${student.totalScore}`)); // 3
 
 
 /***********

@@ -16,20 +16,41 @@ Tree event tries to bridge that gap by offering an API which:
 * Provides an event bubbling and listening system similar to the DOM's
 * Does Arrays properly<sup>*</sup>
 
-How does it look? Try:
+How does it look? Say you have an object representing a person with a list of scores. You may wish to keep track
+of their overall score reactively, but re-summing each change is costly. Instead, consider:
 ```javascript
-myObject = {key: {val: 1, list: [0, {selected: true}]}};
-Treevent.Wrap(myObject);
-myObject.key.list[1].selected = false;
-/* Raises events bubbling up the tree:
-'selected', true => false
-'1.selected', true => false
-'list.1.selected', true => false
-'key.list.1.selected', true => false
-*/
+let student = {
+  scores: [1, 6, -3],
+  totalScore: 0,
+};
+student.totalScore = student.scores.reduce((a, b) => a + b),
+treevent.Listen(student, "scores", (path, params, type, index, oldValue, newValue) => {
+  student.totalScore += (newValue | 0) - (oldValue | 0);
+  // Will log 14 (10 introduced), then 8 (6 removed), then 3 (1 replaced with -4).
+  console.log(`...sum is now ${student.totalScore}`);
+});
 ```
 
-... more coming once this is complete.
+Another more useful example is when you have part of your data store represented as a tree of JS objects (like falcor). The following code sets up a contact store, then listens to just events raised when a user changes their email address:
+```javascript
+let people = {
+  'p1id': {
+    name: 'Person 1',
+    email: 'p1@example.com',
+    subjects: [1, 2, 3],
+  },
+  'p2id': {
+    name: 'Person 2',
+    email: 'p2@example.com',
+    subjects: [1, 3, 5],
+  }
+};
+
+// Log whenever someone changes their email:
+treevent.Listen(people, "{id}.email", (path, params, type, index, oldValue, newValue) => {
+  console.log(`${params.id} updated their email to ${newValue}`)
+});
+```
 
 #### <sup>*</sup>'Proper' arrays
 ```javascript
@@ -46,3 +67,12 @@ In many binding libraries, the above will cause three event changes:
 However, if you're mapping your list into a list of elements (quite common), then most likely you instead want to know a value was inserted at [2], so you can add a mapped DOM element at the same place, to saving having to perform complex diff comparison to find out what has changed.
 
 Similarly with lists, when bubbling events up, it shouldn't take O(n) to calculate the position of the source object in a list, nor should it take O(n) to update all the indexes on a list modification. Treevent performs both in O(log n), so list operations are still fast, and events can bubble with the correct index path.
+
+**NOTE** due to the overhead, treevent should not be used with long lists (e.g. 200+). Lists that big probably shouldn't be used in UIs anyway, but just in case...don't use this to store long timeseries lists.
+
+
+#### TODO
+* Fix path matching to include prefixes - e.g. if 'task' is an array, "task[\*].complete" should fire when 'create'/'delete' is raised against task, or 'update' is raised against task[\*].
+* Tests :)
+* Proper node.js / module packaging etc.
+* Faster indexed listener lookup
