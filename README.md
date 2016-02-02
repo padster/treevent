@@ -9,6 +9,8 @@ Some libraries try to provide equivalents, for example:
 
 ... and most data binding frameworks ([React](https://facebook.github.io/react/), [Angular](https://angularjs.org/), [DoneJS](http://donejs.com/) etc.) support binding to paths but not necessarily good update logic.
 
+For now, uses typescript and ES6 (including destructuring) so please use recent V8 for now.
+
 #### API
 
 Tree event tries to bridge that gap by offering an API which:
