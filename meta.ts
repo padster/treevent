@@ -100,6 +100,8 @@ abstract class TreeventMeta {
       } else if (pathAt >= path.length || p != path[pathAt]) {
         params = null;
         return false;
+      } else {
+        pathAt++;
       }
       return true;
     });

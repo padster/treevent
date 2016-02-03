@@ -7,6 +7,29 @@ Example:
 List aggregation 
 ***********/
 
+let todoList = {
+  name: "My list",
+  tasks: [
+    {days: 1, done: true },
+    {days: 4, done: false},
+    {days: 3, done: false},
+    {days: 1, done: false},
+  ]
+};
+let daysRemaining = todoList.tasks.reduce( (a, b) => (a + (b.done ? b.days : 0)), 0);
+
+treevent.Listen(todoList, "tasks.*", (path, params, type, index, oldValue, newValue) => {
+  console.log("CHANGE! " + path.join('.') + " to " + newValue);
+});
+
+treevent.Listen(todoList, "tasks[*].done", (path, params, type, index, oldValue, newValue) => {
+  console.log(path.join('.'))
+});
+
+
+
+
+/*
 let student = {
   scores: [1, 6, -3],
   totalScore: 0,
@@ -24,6 +47,7 @@ student.scores.splice(1, 2, -4);
 // NOTE: Object changes are processed asynchronously!
 console.log(`Sync > Student score is: ${student.totalScore}`) // 4
 requestAnimationFrame(() => console.log(`Async> Student score is: ${student.totalScore}`)); // 3
+*/
 
 
 /***********
