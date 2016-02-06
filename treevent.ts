@@ -42,7 +42,7 @@ export function Listen(value: any, path = "**", listener: common.Listener): () =
         break;
        default:
          // TODO?
-         console.log("add / remove events need to be handled?");
+         console.log(`${type} events need to be handled?`);
     }
   });
 }

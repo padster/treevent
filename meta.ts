@@ -44,10 +44,11 @@ abstract class TreeventMeta {
   pathChange({path = [], type, index = -1, oldValue = null, newValue = null}) {
     this.listeners.forEach(detail => {
       let {listener, parsedPath} = detail;
-      let params = this.extractParams(path, parsedPath);
-      if (params != null) {
-        listener(path, params, type, index, oldValue, newValue);
-      }
+      this.maybeTriggerListener(listener, path, parsedPath, type, index, oldValue, newValue);
+      // let params = this.extractParams(path, parsedPath, type, oldValue, newValue);
+      // if (params != null) {
+        // listener(path, params, type, index, oldValue, newValue);
+      // }
     });
 
     let parentMeta = Meta(this.parent);
@@ -78,34 +79,221 @@ abstract class TreeventMeta {
   /** Converts a path[type].like[0].here into a list of tokens. */
   parse(path: string): Array<string> {
     // NOTE: remaps a[x] to a.x before splitting. PICK: also remap a/x to a.x?
-    return path.replace(new RegExp("\\[([^\\]])\\]", "g"), ".$1").split(".");
+    return path.replace(new RegExp("\\[([^\\]]*)\\]", "g"), ".$1").split(".");
   }
 
   /**
-   * Given a path, and a parsed path matcher, perform the match.
-   * @return null if no match, otherwise an object containing all {param} and "**" matches.
+   * TODO
    */
-  extractParams(path: Array<any>, parsedPath: Array<string>): Object {
+  maybeTriggerListener(listener: common.Listener, 
+      path: Array<any>, parsedPath: Array<string>,
+      type: string, index: number, oldValue: any, newValue: any) {
+    // console.log("%s vs %s", JSON.stringify(path), JSON.stringify(parsedPath));
     let pathAt = 0, params = {};
-    parsedPath.every(p => {
-      // PICK: use ${key} or {key} or :key etc...?
-      if (p.startsWith('{') && p.endsWith('}')) {
-        if (pathAt >= path.length) { return null; }
-        params[p.substring(1, p.length - 1)] = path[pathAt];
-        pathAt++;
-      } else if (p == "*") {
-        pathAt++;
-      } else if (p == "**") {
+    for (let i = 0; i < parsedPath.length; i++) {
+      let p = parsedPath[i];
+
+      // The second part is to match some.path.** when listening to some.path
+      if (p == "**" || (pathAt == path.length && parsedPath[i + 1] == "**")) {
         params["**"] = path.slice(pathAt);
-      } else if (pathAt >= path.length || p != path[pathAt]) {
-        params = null;
-        return false;
-      } else {
-        pathAt++;
+        listener(path, params, type, index, oldValue, newValue);
+        return;
+
+      } else if (pathAt == path.length) {
+        this.maybeTriggerChildListeners(listener, path, parsedPath, i, params, type, index, oldValue, newValue);
+        return;
+
+      } else if (p.startsWith('{') && p.endsWith('}')) {;
+        // PICK: use ${key} or {key} or :key etc...?
+        params[p.substring(1, p.length - 1)] = path[pathAt];
+      } else if (p == "*") {
+        // No-op, incremented below...
+      } else if (p != path[pathAt]) {
+        return;
       }
-      return true;
-    });
-    return params;
+      pathAt++;
+    };
+
+    if (pathAt == path.length) {
+      listener(path, params, type, index, oldValue, newValue);
+    }
+  }
+
+  maybeTriggerChildListeners(listener: common.Listener, 
+      path: Array<any>, parsedPath: Array<string>, pathUpTo: number, params: Object, 
+      type: string, index: number, oldValue: any, newValue: any) {
+
+    let pathRemains = CLONE(parsedPath).splice(pathUpTo);
+    let oldMatches = {}, newMatches = {}, changes = {};
+    let paramKey = undefined;
+
+    switch (type) {
+      case "update":
+        oldMatches = this.explodeMatches(oldValue, pathRemains, 'oldValue');
+        newMatches = this.explodeMatches(newValue, pathRemains, 'newValue');
+        for (let oldKey in oldMatches) {
+          changes[oldKey] = oldMatches[oldKey];
+          if (newMatches.hasOwnProperty(oldKey)) {
+            changes[oldKey].newValue = newMatches[oldKey].newValue;
+            delete newMatches[oldKey];
+            if (changes[oldKey].oldValue == changes[oldKey].newValue) {
+              delete changes[oldKey];
+            }
+          }
+        }
+        for (let newKey in newMatches) {
+          changes[newKey] = newMatches[newKey];
+        }
+
+        for (let childPath in changes) {
+          let details = changes[childPath];
+          let newPath = path.slice();
+          newPath.push(...JSON.parse(childPath));
+          let newParams = Object.assign({}, params, details.params);
+          listener(newPath, params, "update", index, details.oldValue, details.newValue);
+        }
+        break;
+
+      case "splice":
+        let p = pathRemains[0];
+        if (p == "**") {
+          console.error("** on deep child match unsupported so far...");
+          return;
+        }
+
+        let childPathRemains = CLONE(pathRemains).splice(1);
+
+        let updateCount = Math.min(oldValue.length, newValue.length);
+        for (let i = oldValue.length - 1; i >= updateCount; i--) {
+          paramKey = p.startsWith('{') && p.endsWith('}') ? p.substring(1, p.length - 1) : undefined;
+
+          if (paramKey !== undefined || p == ('' + i) || p == '*') { 
+            oldMatches = this.explodeMatches(oldValue[i], childPathRemains, 'oldValue');
+            for (let oldKey in oldMatches) {
+              let fixedKey = unshiftPathJSON(i + index, oldKey);
+              changes[fixedKey] = oldMatches[oldKey];
+              if (paramKey !== undefined) {
+                changes[fixedKey].params = changes[fixedKey].params || {};
+                changes[fixedKey].params[paramKey] = i + index;
+              }
+            }
+          }
+        }
+        for (let i = 0; i < updateCount; i++) {
+          paramKey = p.startsWith('{') && p.endsWith('}') ? p.substring(1, p.length - 1) : undefined;
+
+          if (paramKey !== undefined || p == ('' + i) || p == '*') { 
+            oldMatches = this.explodeMatches(oldValue[i], childPathRemains, 'oldValue');
+            newMatches = this.explodeMatches(newValue[i], childPathRemains, 'newValue');
+
+            for (let oldKey in oldMatches) {
+              let fixedKey = unshiftPathJSON(i + index, oldKey);
+              changes[fixedKey] = oldMatches[oldKey];
+              if (paramKey !== undefined) {
+                changes[fixedKey].params = changes[fixedKey].params || {};
+                changes[fixedKey].params[paramKey] = i + index;
+              }
+              if (newMatches.hasOwnProperty(oldKey)) {
+                changes[fixedKey].newValue = newMatches[oldKey].newValue;
+                delete newMatches[oldKey];
+                if (changes[fixedKey].oldValue == changes[fixedKey].newValue) {
+                  delete changes[fixedKey];
+                }
+              }
+            }
+            for (let newKey in newMatches) {
+              let fixedKey = unshiftPathJSON(i + index, newKey);
+              changes[fixedKey] = newMatches[newKey];
+              if (paramKey !== undefined) {
+                changes[fixedKey].params = changes[fixedKey].params || {};
+                changes[fixedKey].params[paramKey] = i + index;
+              }
+            }
+          }
+        }
+        for (let i = updateCount; i < newValue.length; i++) {
+          paramKey = p.startsWith('{') && p.endsWith('}') ? p.substring(1, p.length - 1) : undefined;
+
+          if (paramKey !== undefined || p == ('' + i) || p == '*') { 
+            newMatches = this.explodeMatches(newValue[i], childPathRemains, 'newValue');
+            for (var newKey in newMatches) {
+              let fixedKey = unshiftPathJSON(i + index, newKey);
+              changes[fixedKey] = newMatches[newKey];
+              if (paramKey !== undefined) {
+                changes[fixedKey].params = changes[fixedKey].params || {};
+                changes[fixedKey].params[paramKey] = i + index;
+              }
+            }
+          }
+        }
+
+        for (var childPath in changes) {
+          let details = changes[childPath];
+          let newPath = CLONE(path);
+          newPath.push(...JSON.parse(childPath));
+          let newParams = Object.assign({}, params, details.params);
+          listener(newPath, newParams, "update", -1, details.oldValue, details.newValue);
+        }
+
+        break;
+
+      default:
+        console.error("Unknown supported object change type: " + type);
+    }
+  }
+  
+  /**
+   * Given a position, and a path to match, go down to obtain all matches.
+   * Return a result object, mapping [match path array] => {
+   *   params: match params for this child path
+   *   valueKey: value at this position
+   * }
+   */
+  explodeMatches(target: any, path: Array<string>, valueKey: string): Object {
+    let result = {};
+    this.collectMatches(result, target, undefined, [], path, valueKey);
+    return result;
+  }
+
+  collectMatches(collector: Object, target, paramsAt: Object, 
+      pathAt: Array<string>, pathLeft: Array<string>, valueKey: string) {
+    if (pathLeft.length == 0) {
+      let solution = {};
+      if (paramsAt != undefined) {
+        solution['params'] = paramsAt;
+      }
+      solution[valueKey] = target;
+      collector[JSON.stringify(pathAt)] = solution;
+      return;
+    }
+
+    let p = pathLeft[0];
+
+    if (p == "**") {
+      // TODO - either this, or explode EVERYTHING.
+      console.log("** match on whole-object change unsupported (too expensive? try to optimize...");
+      return;
+    } else if (p.startsWith('{') && p.endsWith('}')) {
+      // PICK: use ${key} or {key} or :key etc...?
+      let paramsKey = p.substring(1, p.length - 1);
+      let newParams = CLONE(paramsAt) || {};
+      let newPath = CLONE(pathAt); newPath.push(undefined);
+      for (let key in target) {
+        newParams[paramsKey] = key; 
+        newPath[newPath.length - 1] = key;
+        this.collectMatches(collector, target[key], newParams, newPath, pathLeft.slice(1), valueKey);
+      }      
+    } else if (p == "*") {
+      let newPath = CLONE(pathAt); newPath.push(undefined);
+      for (let key in target) {
+        newPath[newPath.length - 1] = key;
+        this.collectMatches(collector, target[key], paramsAt, newPath, pathLeft.slice(1), valueKey);
+      }
+    } else {
+      let next = target == undefined ? undefined : target[p];
+      let newPath = CLONE(pathAt); newPath.push(p);
+      this.collectMatches(collector, next, paramsAt, newPath, pathLeft.slice(1), valueKey); 
+    }
   }
 
   wrapAndReparent(newValue: any, newParent: any, path: string) {
@@ -239,4 +427,14 @@ function reparent(target: any, parent: any, parentKey: string) {
   if (childMeta != null) {
     childMeta.attachToParent(parent, parentKey);
   }
+}
+
+function CLONE(target: any): any {
+  return JSON.parse(JSON.stringify(target));
+}
+
+function unshiftPathJSON(newPath: number|string, pathJSON: string): string {
+  let parsed = JSON.parse(pathJSON);
+  parsed.unshift(newPath);
+  return JSON.stringify(parsed);
 }

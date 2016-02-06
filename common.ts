@@ -32,3 +32,16 @@ export function cast<T>(instance, ctor: { new(...args: any[]): T }): T {
     if (instance instanceof ctor) return instance;
     throw new Error('type cast exception');
 }
+
+
+/**
+ * Given a root and a path, safely calculate root[path].
+ * Same as root?[path[0]]?[path[1]]? ... ?: undefined 
+ */
+export function safeResolve(target: any, path: Array<string>): any {
+  let result = target;
+  path.forEach(key => {
+    result = result == undefined ? undefined : result[key]
+  });
+  return result;
+}

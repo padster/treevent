@@ -1,12 +1,41 @@
 'use strict';
 import splay = require('./splay');
 import treevent = require('./treevent');
+import utils = require('./utils');
+
 
 /***********
-Example:
-List aggregation 
-***********/
+Test:
+Child editing at different levels.
+***********
+let parent = {
+  child: {
+    value: "x"
+  }
+}
 
+let newValues = [];
+treevent.Listen(parent, "child.value", (path, params, type, index, oldValue, newValue) => {
+  newValues.push(newValue);
+});
+Exec(() => parent.child.value = "y");
+Exec(() => parent.child = {value: "z"});
+Exec(() => parent.child.value = "z");
+Exec(() => parent.child = {value: "z"});
+Exec(() => parent.child.value = "?");
+Exec(() => parent.child = {value: "!"});
+Exec(() => { 
+  if (newValues.join('.') == "y.z.?.!") {
+    console.log("Deep edits working!");
+  } else {
+    console.error("Deep child edits failed! Ended up with: %O", newValues);
+  }
+});
+
+/***********
+Test:
+List aggregation 
+***********
 let todoList = {
   name: "My list",
   tasks: [
@@ -16,39 +45,59 @@ let todoList = {
     {days: 1, done: false},
   ]
 };
-let daysRemaining = todoList.tasks.reduce( (a, b) => (a + (b.done ? b.days : 0)), 0);
+let tasksRemainingHistory = [];
+let tasksRemaining = todoList.tasks.reduce( (a, b) => a + (!b.done ? 1 : 0), 0);
+tasksRemainingHistory.push(tasksRemaining); // [3], dones = TFFF
 
-treevent.Listen(todoList, "tasks.*", (path, params, type, index, oldValue, newValue) => {
-  console.log("CHANGE! " + path.join('.') + " to " + newValue);
+treevent.Listen(todoList, "tasks[{id}].done", (path, params, type, index, oldValue, newValue) => {
+  if (newValue === false) {
+    tasksRemaining++; // Either created or updated.
+  } else if (oldValue === false) {
+    tasksRemaining--; // Either deleted or updated.
+  }
+  tasksRemainingHistory.push(tasksRemaining);
 });
 
-treevent.Listen(todoList, "tasks[*].done", (path, params, type, index, oldValue, newValue) => {
-  console.log(path.join('.'))
+Exec(() => todoList.tasks[2].done = true); // [3, 2], dones = TFTF
+Exec(() => todoList.tasks.unshift({days: 3, done: true})); // [3, 2, 2], dones = TTFTF
+Exec(() => todoList.tasks.splice(1, 2)); // [3, 2, 2, 1, 1] dones = TTF
+Exec(() => todoList.tasks.push({days: 5, done: false})); // [3, 2, 2, 1, 2], dones = TTFF
+Exec(() => todoList.tasks.splice(1, 2, {days: 2, done: false}, {days: 2, done: false}, {days: 9, done: false})); // [3, 2, 2, 1, 2, 3, 4], dones = TFFFF
+
+Exec(() => {
+  if (tasksRemainingHistory.join('.') == '3.2.2.1.1.2.3.4') {
+    console.log("Array deep edits working!");
+  } else {
+    console.error("Array child deep edits failed! Ended up with %O", tasksRemainingHistory);
+  }
 });
 
 
+/***********
+Interactive example:
+Live array maps
+***********/
+let todoList = {
+  tasks: [
+    {days: 1, done: true },
+    {days: 4, done: false},
+    {days: 3, done: false},
+    {days: 1, done: false},
+  ]
+};
 
-
-/*
-let student = {
-  scores: [1, 6, -3],
-  totalScore: 0,
-}
-student.totalScore = student.scores.reduce((a, b) => a + b),
-
-
-treevent.Listen(student, "scores", (path, params, type, index, oldValue, newValue) => {
-  student.totalScore += (newValue | 0) - (oldValue | 0);
-  // Will log 14 (10 introduced), then 8 (6 removed), then 3 (1 replaced with -4).
-  console.log(`...sum is now ${student.totalScore}`);
+let result = utils.LiveMap(todoList.tasks, task => !task.done ? task.days : 0);
+let holder = {sum: result.reduce((a, b) => a + b)};
+console.log("Initial sum = " + holder.sum);
+treevent.Listen(result, "{id}", (path, params, type, index, oldValue, newValue) => {
+  console.log("Single task: %d -> %d", oldValue || 0, newValue || 0);
+  holder.sum += (newValue || 0) - (oldValue || 0);
 });
-student.scores.unshift(10);
-student.scores.splice(1, 2, -4);
-// NOTE: Object changes are processed asynchronously!
-console.log(`Sync > Student score is: ${student.totalScore}`) // 4
-requestAnimationFrame(() => console.log(`Async> Student score is: ${student.totalScore}`)); // 3
-*/
-
+treevent.Listen(holder, "sum", (path, params, type, index, oldValue, newValue) => {
+  console.log("Sum: %d -> %d", oldValue, newValue);
+});
+Exec(() => todoList.tasks.push({days: 3, done: true}));
+Exec(() => todoList.tasks[1].done = true);
 
 /***********
 Example:
@@ -88,4 +137,9 @@ treevent.Listen(people, "**",  (path, params, type, index, oldValue, newValue) =
   }
 });
 
+
+
+function Exec(f): void {
+  requestAnimationFrame(f);
+}
 

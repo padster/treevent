@@ -27,7 +27,7 @@ let student = {
 };
 student.totalScore = student.scores.reduce((a, b) => a + b),
 treevent.Listen(student, "scores", (path, params, type, index, oldValue, newValue) => {
-  student.totalScore += (newValue | 0) - (oldValue | 0);
+  student.totalScore += (newValue || 0) - (oldValue || 0);
   // Will log 14 (10 introduced), then 8 (6 removed), then 3 (1 replaced with -4).
   console.log(`...sum is now ${student.totalScore}`);
 });
@@ -53,6 +53,34 @@ treevent.Listen(people, "{id}.email", (path, params, type, index, oldValue, newV
   console.log(`${params.id} updated their email to ${newValue}`)
 });
 ```
+
+As a third example of where the full features shine, take a more complex case: given a list of objects,
+keep a live value that is the sum of one property across all of them, but only for those where a second property is true.
+```javascript
+let todoList = {
+  tasks: [
+    {days: 1, done: true },
+    {days: 4, done: false},
+    {days: 3, done: false},
+    {days: 1, done: false},
+  ]
+};
+
+let result = utils.LiveMap(todoList.tasks, task => !task.done ? task.days : 0);
+let holder = {sum: result.reduce((a, b) => a + b)};
+console.log("Initial sum = " + holder.sum);
+treevent.Listen(result, "{id}", (path, params, type, index, oldValue, newValue) => {
+  console.log("Single task: %d -> %d", oldValue || 0, newValue || 0);
+  holder.sum += (newValue || 0) - (oldValue || 0);
+});
+treevent.Listen(holder, "sum", (path, params, type, index, oldValue, newValue) => {
+  console.log("Sum: %d -> %d", oldValue, newValue);
+});
+// Now, changing a property within an object, or adding / removing ones from the array,
+// will remap and update / add / remove the new value to result, which will then
+// update the overall sum value stored automatically.
+```
+
 
 #### <sup>*</sup>'Proper' arrays
 ```javascript
