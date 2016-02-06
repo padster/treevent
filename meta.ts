@@ -45,10 +45,6 @@ abstract class TreeventMeta {
     this.listeners.forEach(detail => {
       let {listener, parsedPath} = detail;
       this.maybeTriggerListener(listener, path, parsedPath, type, index, oldValue, newValue);
-      // let params = this.extractParams(path, parsedPath, type, oldValue, newValue);
-      // if (params != null) {
-        // listener(path, params, type, index, oldValue, newValue);
-      // }
     });
 
     let parentMeta = Meta(this.parent);
@@ -82,13 +78,10 @@ abstract class TreeventMeta {
     return path.replace(new RegExp("\\[([^\\]]*)\\]", "g"), ".$1").split(".");
   }
 
-  /**
-   * TODO
-   */
+  // TODO: comment.
   maybeTriggerListener(listener: common.Listener, 
       path: Array<any>, parsedPath: Array<string>,
       type: string, index: number, oldValue: any, newValue: any) {
-    // console.log("%s vs %s", JSON.stringify(path), JSON.stringify(parsedPath));
     let pathAt = 0, params = {};
     for (let i = 0; i < parsedPath.length; i++) {
       let p = parsedPath[i];
@@ -105,6 +98,7 @@ abstract class TreeventMeta {
 
       } else if (p.startsWith('{') && p.endsWith('}')) {;
         // PICK: use ${key} or {key} or :key etc...?
+        // PICK: support or-ing? e.g. some.name|other.field
         params[p.substring(1, p.length - 1)] = path[pathAt];
       } else if (p == "*") {
         // No-op, incremented below...
@@ -119,6 +113,7 @@ abstract class TreeventMeta {
     }
   }
 
+  // TODO: This is waaaay too big, should be split up...
   maybeTriggerChildListeners(listener: common.Listener, 
       path: Array<any>, parsedPath: Array<string>, pathUpTo: number, params: Object, 
       type: string, index: number, oldValue: any, newValue: any) {
@@ -270,7 +265,7 @@ abstract class TreeventMeta {
     let p = pathLeft[0];
 
     if (p == "**") {
-      // TODO - either this, or explode EVERYTHING.
+      // PICK - either this, or explode EVERYTHING.
       console.log("** match on whole-object change unsupported (too expensive? try to optimize...");
       return;
     } else if (p.startsWith('{') && p.endsWith('}')) {
